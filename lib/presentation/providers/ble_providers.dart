@@ -22,3 +22,18 @@ final bleEventProvider = StreamProvider<BleMessage>((ref) {
 final bleConnectionProvider = StreamProvider<bool>((ref) {
   return ref.watch(bleServiceProvider).connectionState;
 });
+
+/// Surfaces the "gave up after 10 reconnect attempts" signal that
+/// bleConnectionProvider drops (it only maps BleConnectionStateChanged
+/// down to its `connected` bool). Without this, a connection attempt
+/// that exhausts all retries looks identical, from the UI's point of
+/// view, to one that was simply never started.
+final bleConnectionGaveUpProvider = StreamProvider<bool>((ref) {
+  return ref
+      .watch(bleServiceProvider)
+      .events
+      .where((m) => m is BleConnectionStateChanged)
+      .cast<BleConnectionStateChanged>()
+      .where((m) => m.gaveUp)
+      .map((_) => true);
+});

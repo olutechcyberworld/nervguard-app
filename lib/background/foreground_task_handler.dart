@@ -193,7 +193,22 @@ class NervGuardTaskHandler extends TaskHandler {
       // Phase 9 — Emit ready.
       _reconnectAttempts = 0;
       _send(const BleConnectionStateChanged(connected: true));
-    } catch (_) {
+    } catch (e, st) {
+      // CORRECTION: this previously used developer.log(), which is
+      // built on the VM service/DevTools protocol. With no VM service
+      // attached (i.e. the app launched normally from the home screen
+      // rather than via `flutter run`), those calls can silently go
+      // nowhere — exactly what happened: a full pairing-and-retry cycle
+      // produced zero "NervGuard.BLE" lines in logcat. print() has no
+      // such dependency; the Flutter engine unconditionally routes it
+      // to native Android logging (tag "flutter") in every build mode.
+      // Filter with:
+      //   adb logcat | grep -i "NervGuard.BLE"
+      // The exception's own message (e.g. "BLE scan timed out",
+      // "Bond rejected", or "Negotiated MTU ... below required ...")
+      // identifies which of the nine phases actually failed.
+      // ignore: avoid_print
+      print('[NervGuard.BLE] connect() failed: $e\n$st');
       await _scheduleReconnect();
     }
   }
