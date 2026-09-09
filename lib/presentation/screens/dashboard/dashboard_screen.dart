@@ -18,6 +18,19 @@ class DashboardScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // FIX: this watch is the entire fix. Feature Vector (A5B30004) is
+    // deliberately NOT subscribed at connection time (see Phase 7 of
+    // the nine-phase sequence in app_architecture_handoff.md) — only
+    // while this screen is visible. subscribeFeatureVector() and
+    // unsubscribeFeatureVector() were both correctly implemented in
+    // RealBleService, but nothing was calling them. Watching this
+    // autoDispose provider here is what starts the subscription while
+    // this screen is on the widget tree, and lets it clean up
+    // automatically shortly after the screen is navigated away from.
+    // See the doc comment on featureVectorSubscriptionProvider itself
+    // for the full diagnosis.
+    ref.watch(featureVectorSubscriptionProvider);
+
     final deviceState = ref.watch(deviceStateNotifierProvider).value;
     final connected = ref.watch(bleConnectionProvider).value ?? false;
     final warmup = ref.watch(warmupActiveProvider);
