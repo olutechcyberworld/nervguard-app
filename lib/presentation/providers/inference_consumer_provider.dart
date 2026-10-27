@@ -31,6 +31,7 @@ class InferenceConsumer extends Notifier<void> {
         }
       case FeatureVectorReceived(:final vector):
         ref.read(latestFeatureVectorProvider.notifier).state = vector;
+        ref.read(recentFeatureVectorsProvider.notifier).add(vector);
       case InterventionTriggered triggered:
         ref
             .read(foregroundInterventionEngineProvider.notifier)

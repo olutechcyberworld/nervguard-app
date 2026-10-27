@@ -23,6 +23,43 @@ final latestFeatureVectorProvider =
     NotifierProvider<LatestFeatureVectorNotifier, FeatureVector?>(
         LatestFeatureVectorNotifier.new);
 
+/// Short history of recent feature vectors, newest last.
+///
+/// The firmware sends the feature vector of window N first and the stress
+/// result for window N a few seconds later (the on-device model takes about
+/// 3.6 s per window). Showing "latest features" beside "latest result" therefore
+/// pairs window N+1 with window N for most of every cycle. Keeping a few recent
+/// vectors lets the dashboard show the features of the window the result is for.
+class RecentFeatureVectorsNotifier extends Notifier<List<FeatureVector>> {
+  static const int _keep = 8;
+
+  @override
+  List<FeatureVector> build() => const [];
+
+  void add(FeatureVector vector) {
+    final next = [...state, vector];
+    state = next.length > _keep ? next.sublist(next.length - _keep) : next;
+  }
+}
+
+final recentFeatureVectorsProvider =
+    NotifierProvider<RecentFeatureVectorsNotifier, List<FeatureVector>>(
+        RecentFeatureVectorsNotifier.new);
+
+/// The feature vector of the same window the latest stress result refers to
+/// (matched by the window sequence number both packets carry). Before the first
+/// result, or if no recent vector matches, it falls back to the newest vector.
+final windowFeatureVectorProvider = Provider<FeatureVector?>((ref) {
+  final inference = ref.watch(latestInferenceProvider);
+  final recent = ref.watch(recentFeatureVectorsProvider);
+  if (recent.isEmpty) return null;
+  if (inference == null) return recent.last;
+  for (final vector in recent.reversed) {
+    if (vector.windowSequence == inference.windowSequence) return vector;
+  }
+  return recent.last;
+});
+
 class BatteryLevelNotifier extends Notifier<int> {
   @override
   int build() => 100; // optimistic default until first BLE notification

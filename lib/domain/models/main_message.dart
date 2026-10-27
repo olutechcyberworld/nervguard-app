@@ -13,6 +13,7 @@ sealed class MainMessage {
           intensive: List<String>.from(m['intensive'] as List),
         ),
       'rcs' => const RequestCalibrationStats(),
+      'rrc' => const RequestReconnect(),
       final t => throw StateError('Unknown MainMessage type: $t'),
     };
   }
@@ -61,4 +62,30 @@ class RequestCalibrationStats extends MainMessage {
 
   @override
   Map<String, dynamic> toMap() => {'t': 'rcs'};
+}
+
+/// Tells an ALREADY-RUNNING background isolate to attempt a fresh
+/// connection right now, resetting any exhausted reconnect backoff.
+///
+/// BUG FIX: this exists because FlutterForegroundTask.startService()
+/// throws internally, and returns ServiceRequestFailure rather than
+/// succeeding, whenever the service is already running — which
+/// RealBleService.connect() was silently discarding. Confirmed cause on
+/// real hardware: the peripheral was powered off overnight, the
+/// background isolate's own _scheduleReconnect() backoff loop exhausted
+/// all 10 attempts and gave up, but giving up does not stop the
+/// foreground service itself, so it stayed alive with
+/// FlutterForegroundTask.isRunningService still true. The next morning,
+/// tapping "Connect Device" called startService() again, which
+/// correctly detected the service was already running, failed
+/// internally, and RealBleService.connect() ignored that failure
+/// entirely — producing a button that appeared to do nothing.
+/// startService() is only valid for a genuine first start; reconnecting
+/// an already-running, already-given-up isolate needs a message sent
+/// INTO that isolate instead, which is what this is for.
+class RequestReconnect extends MainMessage {
+  const RequestReconnect();
+
+  @override
+  Map<String, dynamic> toMap() => {'t': 'rrc'};
 }

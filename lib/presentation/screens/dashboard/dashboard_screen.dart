@@ -35,7 +35,7 @@ class DashboardScreen extends ConsumerWidget {
     final connected = ref.watch(bleConnectionProvider).value ?? false;
     final warmup = ref.watch(warmupActiveProvider);
     final inference = ref.watch(latestInferenceProvider);
-    final featureVector = ref.watch(latestFeatureVectorProvider);
+    final featureVector = ref.watch(windowFeatureVectorProvider);
     final calibration = ref.watch(calibrationStatsNotifierProvider).value;
     final battery = ref.watch(batteryLevelProvider);
 
@@ -78,6 +78,8 @@ class DashboardScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: 12),
                   _HrvCard(fv: featureVector, cal: calibration),
+                  const SizedBox(height: 8),
+                  _DetailRow(fv: featureVector),
                   const SizedBox(height: 12),
                   Row(
                     children: [
@@ -238,7 +240,8 @@ class _StressCard extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Confidence', style: Theme.of(context).textTheme.bodyMedium),
+              Text('Stress probability',
+                  style: Theme.of(context).textTheme.bodyMedium),
               TweenAnimationBuilder<double>(
                 tween: Tween(begin: 0, end: prob * 100),
                 duration: const Duration(milliseconds: 400),
@@ -310,6 +313,40 @@ class _TempCard extends StatelessWidget {
       sdLabel: _sdLabel(sd),
       icon: Icons.thermostat_outlined,
       color: AppColors.stressMid,
+    );
+  }
+}
+
+/// Two numbers the band already sends but the tiles do not show, plus the window
+/// number of the tiles above. Heart rate is derived from the mean beat interval.
+class _DetailRow extends StatelessWidget {
+  final FeatureVector? fv;
+  const _DetailRow({this.fv});
+
+  @override
+  Widget build(BuildContext context) {
+    final f = fv;
+    final rr = f?.hrvMeanRr;
+    final bool haveRate = f != null && f.hrvAvailable && rr != null && rr > 0;
+    final String rateText =
+        haveRate ? '${(60000 / rr).toStringAsFixed(0)} bpm' : 'unavailable';
+    final range = f?.edaRange;
+    final String rangeText =
+        range != null ? '${range.toStringAsFixed(2)} \u00b5S' : '-';
+    final String windowText = f != null ? '${f.windowSequence}' : '-';
+    return GlassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Heart rate: $rateText    EDA range: $rangeText',
+              style: Theme.of(context).textTheme.bodyMedium),
+          const SizedBox(height: 4),
+          Text(
+              'Window $windowText. RMSSD is indicative only; '
+              'heart rate is the more reliable pulse measure.',
+              style: Theme.of(context).textTheme.bodySmall),
+        ],
+      ),
     );
   }
 }

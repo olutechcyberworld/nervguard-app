@@ -33,6 +33,21 @@ class RealBleService implements BleService {
 
   @override
   Future<void> connect() async {
+    // BUG FIX: this used to unconditionally call startService() and
+    // discard its result. startService() throws internally and returns
+    // ServiceRequestFailure — never actually throwing out of this
+    // await — whenever the service is already running, which silently
+    // swallowed the failure and made this method appear to succeed
+    // while doing nothing. See RequestReconnect's doc comment in
+    // main_message.dart for the full mechanism this was causing on
+    // real hardware (button appeared completely dead the morning after
+    // an overnight power cycle). startService() is only valid for a
+    // genuine first start; an already-running isolate needs to be told
+    // to reconnect via a message instead.
+    if (await FlutterForegroundTask.isRunningService) {
+      FlutterForegroundTask.sendDataToTask(const RequestReconnect().toMap());
+      return;
+    }
     await FlutterForegroundTask.startService(
       serviceId: 256,
       notificationTitle: 'NervGuard',

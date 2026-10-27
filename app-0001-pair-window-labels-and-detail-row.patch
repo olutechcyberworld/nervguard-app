@@ -1,0 +1,133 @@
+diff --git a/lib/presentation/providers/inference_consumer_provider.dart b/lib/presentation/providers/inference_consumer_provider.dart
+index 48d0bf5..8883e60 100644
+--- a/lib/presentation/providers/inference_consumer_provider.dart
++++ b/lib/presentation/providers/inference_consumer_provider.dart
+@@ -31,6 +31,7 @@ class InferenceConsumer extends Notifier<void> {
+         }
+       case FeatureVectorReceived(:final vector):
+         ref.read(latestFeatureVectorProvider.notifier).state = vector;
++        ref.read(recentFeatureVectorsProvider.notifier).add(vector);
+       case InterventionTriggered triggered:
+         ref
+             .read(foregroundInterventionEngineProvider.notifier)
+diff --git a/lib/presentation/providers/inference_providers.dart b/lib/presentation/providers/inference_providers.dart
+index b61908e..371aa83 100644
+--- a/lib/presentation/providers/inference_providers.dart
++++ b/lib/presentation/providers/inference_providers.dart
+@@ -23,6 +23,43 @@ final latestFeatureVectorProvider =
+     NotifierProvider<LatestFeatureVectorNotifier, FeatureVector?>(
+         LatestFeatureVectorNotifier.new);
+ 
++/// Short history of recent feature vectors, newest last.
++///
++/// The firmware sends the feature vector of window N first and the stress
++/// result for window N a few seconds later (the on-device model takes about
++/// 3.6 s per window). Showing "latest features" beside "latest result" therefore
++/// pairs window N+1 with window N for most of every cycle. Keeping a few recent
++/// vectors lets the dashboard show the features of the window the result is for.
++class RecentFeatureVectorsNotifier extends Notifier<List<FeatureVector>> {
++  static const int _keep = 8;
++
++  @override
++  List<FeatureVector> build() => const [];
++
++  void add(FeatureVector vector) {
++    final next = [...state, vector];
++    state = next.length > _keep ? next.sublist(next.length - _keep) : next;
++  }
++}
++
++final recentFeatureVectorsProvider =
++    NotifierProvider<RecentFeatureVectorsNotifier, List<FeatureVector>>(
++        RecentFeatureVectorsNotifier.new);
++
++/// The feature vector of the same window the latest stress result refers to
++/// (matched by the window sequence number both packets carry). Before the first
++/// result, or if no recent vector matches, it falls back to the newest vector.
++final windowFeatureVectorProvider = Provider<FeatureVector?>((ref) {
++  final inference = ref.watch(latestInferenceProvider);
++  final recent = ref.watch(recentFeatureVectorsProvider);
++  if (recent.isEmpty) return null;
++  if (inference == null) return recent.last;
++  for (final vector in recent.reversed) {
++    if (vector.windowSequence == inference.windowSequence) return vector;
++  }
++  return recent.last;
++});
++
+ class BatteryLevelNotifier extends Notifier<int> {
+   @override
+   int build() => 100; // optimistic default until first BLE notification
+diff --git a/lib/presentation/screens/dashboard/dashboard_screen.dart b/lib/presentation/screens/dashboard/dashboard_screen.dart
+index fcdd995..7ad1255 100644
+--- a/lib/presentation/screens/dashboard/dashboard_screen.dart
++++ b/lib/presentation/screens/dashboard/dashboard_screen.dart
+@@ -35,7 +35,7 @@ class DashboardScreen extends ConsumerWidget {
+     final connected = ref.watch(bleConnectionProvider).value ?? false;
+     final warmup = ref.watch(warmupActiveProvider);
+     final inference = ref.watch(latestInferenceProvider);
+-    final featureVector = ref.watch(latestFeatureVectorProvider);
++    final featureVector = ref.watch(windowFeatureVectorProvider);
+     final calibration = ref.watch(calibrationStatsNotifierProvider).value;
+     final battery = ref.watch(batteryLevelProvider);
+ 
+@@ -78,6 +78,8 @@ class DashboardScreen extends ConsumerWidget {
+                   ),
+                   const SizedBox(height: 12),
+                   _HrvCard(fv: featureVector, cal: calibration),
++                  const SizedBox(height: 8),
++                  _DetailRow(fv: featureVector),
+                   const SizedBox(height: 12),
+                   Row(
+                     children: [
+@@ -238,7 +240,8 @@ class _StressCard extends StatelessWidget {
+           Row(
+             mainAxisAlignment: MainAxisAlignment.spaceBetween,
+             children: [
+-              Text('Confidence', style: Theme.of(context).textTheme.bodyMedium),
++              Text('Stress probability',
++                  style: Theme.of(context).textTheme.bodyMedium),
+               TweenAnimationBuilder<double>(
+                 tween: Tween(begin: 0, end: prob * 100),
+                 duration: const Duration(milliseconds: 400),
+@@ -314,6 +317,40 @@ class _TempCard extends StatelessWidget {
+   }
+ }
+ 
++/// Two numbers the band already sends but the tiles do not show, plus the window
++/// number of the tiles above. Heart rate is derived from the mean beat interval.
++class _DetailRow extends StatelessWidget {
++  final FeatureVector? fv;
++  const _DetailRow({this.fv});
++
++  @override
++  Widget build(BuildContext context) {
++    final f = fv;
++    final rr = f?.hrvMeanRr;
++    final bool haveRate = f != null && f.hrvAvailable && rr != null && rr > 0;
++    final String rateText =
++        haveRate ? '${(60000 / rr!).toStringAsFixed(0)} bpm' : 'unavailable';
++    final range = f?.edaRange;
++    final String rangeText =
++        range != null ? '${range.toStringAsFixed(2)} \u00b5S' : '-';
++    final String windowText = f != null ? '${f.windowSequence}' : '-';
++    return GlassCard(
++      child: Column(
++        crossAxisAlignment: CrossAxisAlignment.start,
++        children: [
++          Text('Heart rate: $rateText    EDA range: $rangeText',
++              style: Theme.of(context).textTheme.bodyMedium),
++          const SizedBox(height: 4),
++          Text(
++              'Window $windowText. RMSSD is indicative only; '
++              'heart rate is the more reliable pulse measure.',
++              style: Theme.of(context).textTheme.bodySmall),
++        ],
++      ),
++    );
++  }
++}
++
+ class _HrvCard extends StatelessWidget {
+   final FeatureVector? fv;
+   final CalibrationStats? cal;

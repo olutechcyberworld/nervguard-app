@@ -44,6 +44,27 @@ class NervGuardTaskHandler extends TaskHandler {
 
   String? _activeSessionId;
   bool _featureVectorSubscribed = false;
+  // BUG FIX: separate from _featureVectorSubscribed above, and this is
+  // the actual fix, not just a rename. _featureVectorSubscribed tracks
+  // whether THIS specific GATT characteristic instance currently has
+  // notifications enabled, and gets reset to false at the top of
+  // _connect() below since a fresh connection means a fresh instance
+  // regardless of what happened before. _featureVectorWanted tracks the
+  // Dashboard's standing INTENT — does it want feature vector data at
+  // all — and deliberately survives across reconnects. Without this,
+  // a same-isolate reconnect (the RequestReconnect path added for the
+  // "Connect Device button does nothing" fix) left the Dashboard's EDA
+  // and Temperature cards stuck at "-" forever after reconnecting,
+  // because featureVectorStreamProvider only calls
+  // subscribeFeatureVector() once, when it first builds, and has no way
+  // to know a BLE reconnect happened underneath it. Confirmed on real
+  // hardware: HRV kept working after reconnect (delivered via the
+  // Inference characteristic, unconditionally re-subscribed every
+  // _connect() in Phase 7 below with no such guard) while EDA/Temp
+  // (delivered via this gated characteristic) did not — that split is
+  // exactly what pointed at this being a subscription-state bug rather
+  // than a data or parsing problem.
+  bool _featureVectorWanted = false;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
@@ -98,11 +119,32 @@ class NervGuardTaskHandler extends TaskHandler {
         _interventionCore.updatePool(mild: mild, intensive: intensive);
       case RequestCalibrationStats():
         _readAndSendCalibrationStats();
+      case RequestReconnect():
+        // See the doc comment on RequestReconnect in main_message.dart
+        // for the full mechanism this exists to fix. Reset the backoff
+        // counter (this isolate may have already exhausted all 10
+        // attempts and given up hours ago) and immediately try again,
+        // rather than waiting for whatever delay _scheduleReconnect()
+        // last calculated, or worse, silently doing nothing because the
+        // caller assumed startService() would handle this — it cannot,
+        // for an isolate that is already running.
+        _reconnectAttempts = 0;
+        unawaited(_connect());
     }
   }
 
   Future<void> _connect() async {
     try {
+      // BUG FIX, first half: reset the per-characteristic-instance
+      // subscription flag at the start of every connection attempt.
+      // _featureVectorChar itself gets a fresh instance from
+      // _resolveCharacteristics() below on every call, but this bool
+      // previously survived across reconnects on a reused isolate,
+      // causing _setFeatureVectorSubscription() to wrongly believe
+      // notifications were already active on a characteristic instance
+      // that had never actually been subscribed this time around.
+      _featureVectorSubscribed = false;
+
       // Phase 1 — Scan by service UUID.
       // Phase 1 — Scan without service filter (ESP32-S3 NimBLE advertises
 // service UUID in scan response, not primary advertisement; Android
@@ -193,6 +235,17 @@ class NervGuardTaskHandler extends TaskHandler {
       // Phase 9 — Emit ready.
       _reconnectAttempts = 0;
       _send(const BleConnectionStateChanged(connected: true));
+
+      // BUG FIX, second half: if the Dashboard previously wanted
+      // feature vector notifications, re-apply that intent now rather
+      // than waiting for the main isolate to ask again — it likely
+      // never will, since featureVectorStreamProvider only sends that
+      // request once, on its own initial build. This is what actually
+      // makes EDA and Temperature resume updating after a reconnect,
+      // same-isolate or otherwise.
+      if (_featureVectorWanted) {
+        await _setFeatureVectorSubscription(enabled: true);
+      }
     } catch (e, st) {
       // CORRECTION: this previously used developer.log(), which is
       // built on the VM service/DevTools protocol. With no VM service
@@ -329,6 +382,11 @@ class NervGuardTaskHandler extends TaskHandler {
   }
 
   Future<void> _setFeatureVectorSubscription({required bool enabled}) async {
+    // Record intent unconditionally, before any of the early returns
+    // below — this is what Phase 9 above checks after a reconnect, and
+    // it must reflect what the Dashboard actually asked for regardless
+    // of whether this particular call ends up doing any GATT work.
+    _featureVectorWanted = enabled;
     if (_featureVectorChar == null) return;
     if (enabled == _featureVectorSubscribed) return;
     try {
